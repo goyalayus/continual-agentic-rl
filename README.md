@@ -36,4 +36,4 @@ This repo will hold the code, traces, eval configs, and training scripts for the
 
 ## Team
 
-Ayush, Manan, Vyom, Kanishk.
+Ayush, Manan, Vyom, [Kanishk](https://github.com/kanishkez).
