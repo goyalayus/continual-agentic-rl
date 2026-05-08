@@ -9,6 +9,7 @@ dumps/
 dump.rdb
 *.rdg
 logs/
+tau3_custom_harness_runs/
 data/simulations/*
 data/exp/
 data/datasets/

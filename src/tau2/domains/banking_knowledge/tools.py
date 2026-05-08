@@ -81,6 +81,28 @@ def _parse_balance(val: Any) -> float:
     return 0.0
 
 
+def _normalize_json_arguments(
+    arguments: str | Dict[str, Any] | None,
+) -> tuple[Dict[str, Any] | None, str | None]:
+    """Accept both JSON-string args and object-shaped tool-call args."""
+    if arguments is None or arguments == "":
+        return {}, None
+    if isinstance(arguments, dict):
+        return arguments, None
+    if not isinstance(arguments, str):
+        return None, (
+            "arguments must be a JSON string or object, "
+            f"got {type(arguments).__name__}"
+        )
+    try:
+        parsed = json.loads(arguments)
+    except json.JSONDecodeError as e:
+        return None, f"Invalid JSON in arguments: {e}"
+    if not isinstance(parsed, dict):
+        return None, "arguments must decode to a JSON object"
+    return parsed, None
+
+
 def _get_account_balance(account: Dict[str, Any]) -> float:
     """Get account balance from either 'current_holdings' or 'balance' field."""
     return _parse_balance(account.get("current_holdings", account.get("balance", 0)))
@@ -519,7 +541,7 @@ class KnowledgeTools(ToolKitBase):
 
     @is_tool(ToolType.GENERIC, mutates_state=True)
     def give_discoverable_user_tool(
-        self, discoverable_tool_name: str, arguments: str = "{}"
+        self, discoverable_tool_name: str, arguments: str | Dict[str, Any] = "{}"
     ) -> str:
         """Pass a tool to the user so they can execute it themselves.
 
@@ -531,7 +553,7 @@ class KnowledgeTools(ToolKitBase):
 
         Args:
             discoverable_tool_name: The name of the discoverable tool (e.g., "open_webpage", "navigate_to_section")
-            arguments: JSON string of arguments for the tool (e.g., '{"url": "https://example.com"}')
+            arguments: JSON string or object of arguments for the tool (e.g., '{"url": "https://example.com"}')
 
         Returns:
             A confirmation message with instructions for the user
@@ -544,11 +566,10 @@ class KnowledgeTools(ToolKitBase):
         if not getattr(method, DISCOVERABLE_ATTR, False):
             return f"Error: Unknown discoverable tool '{discoverable_tool_name}'."
 
-        # Parse arguments
-        try:
-            args_dict = json.loads(arguments)
-        except json.JSONDecodeError as e:
-            return f"Error: Invalid JSON in arguments: {e}"
+        args_dict, error = _normalize_json_arguments(arguments)
+        if error:
+            return f"Error: {error}"
+        assert args_dict is not None
 
         # Validate arguments against method signature (don't require all - user fills in)
         sig = inspect.signature(method)
@@ -630,7 +651,7 @@ class KnowledgeTools(ToolKitBase):
 
     @is_tool(ToolType.WRITE)
     def call_discoverable_agent_tool(
-        self, agent_tool_name: str, arguments: str = "{}"
+        self, agent_tool_name: str, arguments: str | Dict[str, Any] = "{}"
     ) -> str:
         """Call an agent discoverable tool that you have previously unlocked.
 
@@ -639,7 +660,7 @@ class KnowledgeTools(ToolKitBase):
 
         Args:
             agent_tool_name: The name of the agent discoverable tool to call
-            arguments: JSON string of arguments for the tool (e.g., '{"user_id": "abc123"}')
+            arguments: JSON string or object of arguments for the tool (e.g., '{"user_id": "abc123"}')
 
         Returns:
             The result of executing the agent tool
@@ -655,11 +676,10 @@ class KnowledgeTools(ToolKitBase):
                 f"You must first use `unlock_discoverable_agent_tool` to unlock this tool before calling it."
             )
 
-        # Parse arguments
-        try:
-            args_dict = json.loads(arguments)
-        except json.JSONDecodeError as e:
-            return f"Error: Invalid JSON in arguments: {e}"
+        args_dict, error = _normalize_json_arguments(arguments)
+        if error:
+            return f"Error: {error}"
+        assert args_dict is not None
 
         # Get the method and call it directly with the parsed arguments
         method = self.get_discoverable_tools()[agent_tool_name]
@@ -4430,7 +4450,7 @@ class KnowledgeUserTools(ToolKitBase):
 
     @is_tool(ToolType.WRITE)
     def call_discoverable_user_tool(
-        self, discoverable_tool_name: str, arguments: str = "{}"
+        self, discoverable_tool_name: str, arguments: str | Dict[str, Any] = "{}"
     ) -> str:
         """Call a tool that was given to you by the agent.
 
@@ -4442,7 +4462,7 @@ class KnowledgeUserTools(ToolKitBase):
 
         Args:
             discoverable_tool_name: The name of the discoverable tool to call (e.g., "open_webpage")
-            arguments: JSON string of arguments for the tool (e.g., '{"url": "https://example.com"}')
+            arguments: JSON string or object of arguments for the tool (e.g., '{"url": "https://example.com"}')
 
         Returns:
             The result of executing the discoverable tool
@@ -4451,11 +4471,10 @@ class KnowledgeUserTools(ToolKitBase):
         if not self.has_discoverable_tool(discoverable_tool_name):
             return f"Error: Unknown discoverable tool '{discoverable_tool_name}'."
 
-        # Parse arguments
-        try:
-            args_dict = json.loads(arguments)
-        except json.JSONDecodeError as e:
-            return f"Error: Invalid JSON in arguments: {e}"
+        args_dict, error = _normalize_json_arguments(arguments)
+        if error:
+            return f"Error: {error}"
+        assert args_dict is not None
 
         # Get the method and validate arguments against method signature
         method = self.get_discoverable_tools()[discoverable_tool_name]
