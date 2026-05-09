@@ -64,6 +64,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--log-dir", type=Path, default=REPO_ROOT / "tau3_custom_harness_runs")
     parser.add_argument(
+        "--run-id",
+        default=None,
+        help="Optional run id supplied by a parent batch runner.",
+    )
+    parser.add_argument(
         "--s3-uri",
         default=os.environ.get("TAU3_TRACE_S3_URI"),
         help="Optional s3://bucket/prefix destination for the finished run folder.",
@@ -109,7 +114,7 @@ def main() -> int:
         available = ", ".join(t.id for t in get_tasks()[:10])
         raise SystemExit(f"Unknown task id {args.task_id}. First available: {available}")
 
-    logger = HarnessLogger(log_dir=args.log_dir)
+    logger = HarnessLogger(log_dir=args.log_dir, run_id=args.run_id)
     agent = None
     set_llm_log_dir(logger.run_dir / "llm_calls")
     set_llm_log_mode("all")
