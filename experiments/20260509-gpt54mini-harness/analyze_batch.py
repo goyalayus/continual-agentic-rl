@@ -57,6 +57,8 @@ def event_counts(run_dir: Path) -> Counter:
 
 
 def classify_row(row: dict[str, Any]) -> str:
+    if row.get("skipped_reason"):
+        return f"not_run_{row['skipped_reason']}"
     if row.get("returncode") != 0:
         tail = row.get("output_tail") or row.get("stdout_tail") or ""
         if "rate limit" in tail.lower() or "429" in tail:
@@ -65,7 +67,20 @@ def classify_row(row: dict[str, Any]) -> str:
             return "provider_temperature"
         if "Prompt tokens limit exceeded" in tail:
             return "provider_prompt_limit"
-        if "requires more credits" in tail:
+        lower_tail = tail.lower()
+        if any(
+            pattern in lower_tail
+            for pattern in (
+                "requires more credits",
+                "insufficient credits",
+                "insufficient credit",
+                "insufficient quota",
+                "quota exceeded",
+                "out of credits",
+                "credit balance",
+                "payment required",
+            )
+        ):
             return "provider_credit_limit"
         return "harness_or_provider_error"
     result = row.get("result") or {}

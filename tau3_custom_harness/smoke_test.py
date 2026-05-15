@@ -65,8 +65,16 @@ def assert_mixed_internal_public_calls_retry() -> None:
                 tool_calls=[
                     ToolCall(
                         id="internal",
-                        name="ask_knowledge_subagent",
-                        arguments={"question": "policy?", "context": ""},
+                        name="ask_knowledge_subagents",
+                        arguments={
+                            "requests": [
+                                {
+                                    "label": "policy",
+                                    "question": "policy?",
+                                    "context": "",
+                                }
+                            ]
+                        },
                     ),
                     ToolCall(
                         id="public",
@@ -118,8 +126,16 @@ def assert_internal_kb_call_stays_internal() -> None:
                 tool_calls=[
                     ToolCall(
                         id="internal",
-                        name="ask_knowledge_subagent",
-                        arguments={"question": "policy?", "context": ""},
+                        name="ask_knowledge_subagents",
+                        arguments={
+                            "requests": [
+                                {
+                                    "label": "policy",
+                                    "question": "policy?",
+                                    "context": "",
+                                }
+                            ]
+                        },
                     )
                 ],
                 cost=0.01,
@@ -135,13 +151,13 @@ def assert_internal_kb_call_stays_internal() -> None:
             "fake-model",
             retriever=BankingHybridRetriever(),
         )
-        agent.ask_knowledge_subagent = lambda question, context="": "policy note"
+        agent._run_subagent_batch = lambda requests: ("## policy\nstatus: ok\npolicy note", False)
         state = agent.get_init_state()
         message = agent._generate_next_message(UserMessage.text("hello"), state)
         assert message.content == "I checked the policy."
         hidden_tool_messages = [item for item in state.messages if getattr(item, "role", None) == "tool"]
         assert len(hidden_tool_messages) == 1
-        assert hidden_tool_messages[0].content == "policy note"
+        assert "policy note" in hidden_tool_messages[0].content
         assert message.cost == 0.03
     finally:
         agent_module.generate = original_generate
@@ -158,8 +174,16 @@ def assert_failed_kb_lookup_blocks_state_changing_tools() -> None:
                 tool_calls=[
                     ToolCall(
                         id="internal",
-                        name="ask_knowledge_subagent",
-                        arguments={"question": "policy?", "context": ""},
+                        name="ask_knowledge_subagents",
+                        arguments={
+                            "requests": [
+                                {
+                                    "label": "policy",
+                                    "question": "policy?",
+                                    "context": "",
+                                }
+                            ]
+                        },
                     )
                 ],
                 cost=0.01,
@@ -187,8 +211,9 @@ def assert_failed_kb_lookup_blocks_state_changing_tools() -> None:
             "fake-model",
             retriever=BankingHybridRetriever(),
         )
-        agent.ask_knowledge_subagent = lambda question, context="": (_ for _ in ()).throw(
-            RuntimeError("provider failed")
+        agent._run_subagent_batch = lambda requests: (
+            "## policy\nstatus: error\nError: provider failed",
+            True,
         )
         state = agent.get_init_state()
         message = agent._generate_next_message(UserMessage.text("hello"), state)
@@ -385,12 +410,22 @@ def main() -> int:
             retriever=retriever,
         )
         planner_tool_names = [tool.name for tool in agent.tools]
-        assert "ask_knowledge_subagent" in planner_tool_names
+        assert "ask_knowledge_subagents" in planner_tool_names
+        assert "ask_knowledge_subagent" not in planner_tool_names
+        single_agent = PlannerSubagentAgent(
+            env.get_tools(),
+            env.get_policy(),
+            "gpt-4.1",
+            retriever=retriever,
+            subagent_delegation="single",
+        )
+        single_planner_tool_names = [tool.name for tool in single_agent.tools]
+        assert "ask_knowledge_subagent" in single_planner_tool_names
+        assert "ask_knowledge_subagents" not in single_planner_tool_names
         assert not {"KB_search", "grep", "shell"} & set(planner_tool_names)
         assert [tool.name for tool in agent._subagent_tools(1)] == [
             "search",
             "read_doc",
-            "ask_knowledge_subagent",
         ]
         assert [tool.name for tool in agent._subagent_tools(2)] == [
             "search",

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from itertools import count
 import re
-from typing import Optional
+from threading import Lock
+from typing import Iterable, Optional
 
 from loguru import logger
 from pydantic import BaseModel
@@ -25,7 +29,7 @@ from tau2.data_model.message import (
     UserMessage,
 )
 from tau2.environment.tool import Tool, as_tool
-from tau2.utils.llm_utils import generate
+from tau2.utils.llm_utils import generate, set_llm_log_dir, set_llm_log_mode
 
 from tau3_custom_harness.logger import HarnessLogger
 from tau3_custom_harness.prompts import planner_system_prompt, subagent_system_prompt
@@ -56,29 +60,41 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
         llm_args: Optional[dict] = None,
         subagent_llm: str | None = None,
         subagent_llm_args: Optional[dict] = None,
-        max_planner_internal_turns: int = 8,
-        max_subagent_turns: int = 8,
-        max_subagent_depth: int = 2,
+        max_planner_internal_turns: int | None = None,
+        max_subagent_turns: int | None = None,
+        kb_document_count: int | None = None,
+        default_user_tools: list[Tool] | None = None,
+        subagent_delegation: str = "batch",
         logger_: HarnessLogger | None = None,
     ):
+        if subagent_delegation not in {"single", "batch"}:
+            raise ValueError("subagent_delegation must be 'single' or 'batch'")
         self.retriever = retriever or BankingHybridRetriever()
         self.subagent_llm = subagent_llm or llm
         self.subagent_llm_args = dict(subagent_llm_args or llm_args or {})
         self.max_planner_internal_turns = max_planner_internal_turns
         self.max_subagent_turns = max_subagent_turns
-        self.max_subagent_depth = max_subagent_depth
+        self.kb_document_count = kb_document_count
+        self.default_user_tools = list(default_user_tools or [])
+        self.subagent_delegation = subagent_delegation
         self.logger = logger_ or HarnessLogger()
         self._auxiliary_cost_this_turn = 0.0
         self._read_docs: dict[str, str] = {}
         self._policy_lookup_failed = False
+        self._state_lock = Lock()
 
-        self._internal_tool_names = {"ask_knowledge_subagent"}
+        if self.subagent_delegation == "single":
+            self._internal_tool_names = {"ask_knowledge_subagent"}
+            knowledge_tools = [as_tool(self.ask_knowledge_subagent)]
+        else:
+            self._internal_tool_names = {"ask_knowledge_subagents"}
+            knowledge_tools = [as_tool(self.ask_knowledge_subagents)]
         self._discoverable_tool_argument_names = {
             "unlock_discoverable_agent_tool": "agent_tool_name",
             "call_discoverable_agent_tool": "agent_tool_name",
             "give_discoverable_user_tool": "discoverable_tool_name",
         }
-        public_tools = tools + [as_tool(self.ask_knowledge_subagent)]
+        public_tools = tools + knowledge_tools
         super().__init__(
             tools=public_tools,
             domain_policy=domain_policy,
@@ -92,7 +108,31 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
 
     @property
     def system_prompt(self) -> str:
-        return planner_system_prompt(self.domain_policy)
+        return planner_system_prompt(
+            self.domain_policy,
+            kb_document_count=self.kb_document_count,
+            default_user_tools=self._format_default_user_tools(),
+            subagent_delegation=self.subagent_delegation,
+        )
+
+    def _format_default_user_tools(self) -> str:
+        if not self.default_user_tools:
+            return "None listed for this task."
+
+        blocks = []
+        for tool in self.default_user_tools:
+            signature = getattr(tool, "__signature__", "")
+            description = ""
+            try:
+                description = tool.openai_schema["function"].get("description", "")
+            except Exception:
+                description = tool.short_desc or tool.long_desc
+            description = " ".join(str(description).split())
+            block = f"- {tool.name}{signature}"
+            if description:
+                block += f": {description}"
+            blocks.append(block)
+        return "\n".join(blocks)
 
     def get_init_state(
         self, message_history: Optional[list[Message]] = None
@@ -124,7 +164,7 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
 
         internal_cost = 0.0
         self._auxiliary_cost_this_turn = 0.0
-        for turn in range(self.max_planner_internal_turns):
+        for turn in self._turns(self.max_planner_internal_turns):
             assistant_message = generate(
                 model=self.llm,
                 tools=self.tools,
@@ -158,9 +198,9 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
                 )
                 state.messages.append(
                     UserMessage.text(
-                        "Planner format correction: ask_knowledge_subagent cannot "
+                        f"Planner format correction: {self._knowledge_tool_name()} cannot "
                         "be mixed with banking DB/action tools. Retry with only "
-                        "ask_knowledge_subagent, or make only public banking tool "
+                        f"{self._knowledge_tool_name()}, or make only public banking tool "
                         "calls, or send a customer message."
                     )
                 )
@@ -178,7 +218,7 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
                 state.messages.append(
                     UserMessage.text(
                         "Planner evidence correction: before using a discoverable "
-                        "agent or user tool, ask the knowledge subagent to search "
+                        "agent or user tool, ask the knowledge subagents to search "
                         "and read the KB document containing the exact tool name. "
                         "Then retry the tool call after the source text has been read."
                     )
@@ -225,7 +265,11 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
         )
 
     def ask_knowledge_subagent(self, question: str, context: str = "") -> str:
-        """Ask a knowledge-base subagent to research banking policy.
+        """Ask one knowledge-base subagent to research banking policy.
+
+        Use this for all knowledge-base research in single-subagent mode. Ask
+        one narrow question at a time. If the task has another independent
+        policy/tool question, call this tool again in a later internal turn.
 
         Args:
             question: The exact policy question the planner needs answered.
@@ -236,7 +280,126 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
         """
         return self._run_subagent(question=question, context=context, depth=1)
 
+    def ask_knowledge_subagents(self, requests: list[dict] | str) -> str:
+        """Ask one or more knowledge-base subagents to research banking policy.
+
+        Use this for all knowledge-base research. The requests list may contain
+        1 to 4 items. Use one item for one narrow question. Use 2 to 4 items
+        when the task has independent policy/tool questions that can be checked
+        separately, such as verification rules, product policy, hidden tool
+        names, default-vs-discoverable tool choice, or escalation rules.
+
+        Args:
+            requests: JSON array/list of request objects. Each object should
+                include label, question, and optional context. Maximum 4
+                requests per call; extra requests are ignored.
+
+        Returns:
+            Labeled research notes for the planner.
+        """
+        content, _error = self._run_subagent_batch(requests)
+        return content
+
+    def _run_subagent_batch(self, requests: list[dict] | str) -> tuple[str, bool]:
+        normalized, note = self._normalize_subagent_requests(requests)
+        if not normalized:
+            return "Error: ask_knowledge_subagents requires at least one request.", True
+
+        results_by_index: dict[int, dict[str, str]] = {}
+        with ThreadPoolExecutor(max_workers=len(normalized)) as executor:
+            futures = {
+                executor.submit(
+                    self._run_subagent,
+                    question=request["question"],
+                    context=request["context"],
+                    depth=1,
+                ): (index, request)
+                for index, request in enumerate(normalized)
+            }
+            for future in as_completed(futures):
+                index, request = futures[future]
+                try:
+                    answer = future.result()
+                    status = "ok"
+                except Exception as exc:
+                    answer = f"Error: {exc}"
+                    status = "error"
+                    self.logger.log(
+                        "subagent_batch_error",
+                        label=request["label"],
+                        error=str(exc),
+                    )
+                results_by_index[index] = {
+                    "label": request["label"],
+                    "status": status,
+                    "answer": answer,
+                }
+
+        ordered_results = [
+            results_by_index[index] for index in range(len(normalized))
+        ]
+        response = self._format_subagent_batch_results(ordered_results)
+        if note:
+            response = note + "\n\n" + response
+        all_failed = all(result["status"] == "error" for result in ordered_results)
+        return response, all_failed
+
+    def _normalize_subagent_requests(
+        self, requests: list[dict] | str
+    ) -> tuple[list[dict[str, str]], str]:
+        note = ""
+        raw_requests: object = requests
+        if isinstance(requests, str):
+            try:
+                raw_requests = json.loads(requests)
+            except json.JSONDecodeError:
+                return [], "Error: requests must be a JSON array/list."
+
+        if isinstance(raw_requests, dict):
+            raw_requests = [raw_requests]
+        if not isinstance(raw_requests, list):
+            return [], "Error: requests must be a JSON array/list."
+
+        if len(raw_requests) > 4:
+            note = (
+                "Note: ask_knowledge_subagents accepts at most 4 requests per "
+                "call; extra requests were ignored."
+            )
+
+        normalized = []
+        for index, raw_request in enumerate(raw_requests[:4], start=1):
+            if not isinstance(raw_request, dict):
+                continue
+            question = str(raw_request.get("question") or "").strip()
+            if not question:
+                continue
+            label = str(raw_request.get("label") or f"request_{index}").strip()
+            context = str(raw_request.get("context") or "").strip()
+            normalized.append(
+                {
+                    "label": label or f"request_{index}",
+                    "question": question,
+                    "context": context,
+                }
+            )
+        return normalized, note
+
+    def _format_subagent_batch_results(self, results: list[dict[str, str]]) -> str:
+        blocks = []
+        for result in results:
+            blocks.append(
+                "\n".join(
+                    [
+                        f"## {result['label']}",
+                        f"status: {result['status']}",
+                        result["answer"].strip() or "(no answer)",
+                    ]
+                )
+            )
+        return "\n\n".join(blocks)
+
     def _run_subagent(self, question: str, context: str, depth: int) -> str:
+        self._ensure_thread_llm_logging()
         prompt = "\n".join(
             [
                 "Research this banking KB question for the planner.",
@@ -250,7 +413,10 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
         messages: list[APICompatibleMessage] = [
             SystemMessage(
                 role="system",
-                content=subagent_system_prompt(depth=depth, max_depth=self.max_subagent_depth),
+                content=subagent_system_prompt(
+                    depth=depth,
+                    kb_document_count=self.kb_document_count,
+                ),
             ),
             # UserMessage is API-compatible, but importing it here only to appease
             # type checkers would add noise. The Tau generator accepts this shape.
@@ -265,7 +431,7 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
         )
 
         total_cost = 0.0
-        for turn in range(self.max_subagent_turns):
+        for turn in self._turns(self.max_subagent_turns):
             assistant_message = generate(
                 model=self.subagent_llm,
                 tools=tools,
@@ -285,7 +451,8 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
                     cost=total_cost,
                     answer=answer,
                 )
-                self._auxiliary_cost_this_turn += total_cost
+                with self._state_lock:
+                    self._auxiliary_cost_this_turn += total_cost
                 return answer
 
             for tool_call in assistant_message.tool_calls or []:
@@ -303,36 +470,72 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
                 )
 
         self.logger.log("subagent_limit", depth=depth, cost=total_cost)
-        self._auxiliary_cost_this_turn += total_cost
+        with self._state_lock:
+            self._auxiliary_cost_this_turn += total_cost
         return "The KB subagent hit its tool-turn limit before producing a final note."
 
-    def _subagent_tools(self, depth: int) -> list[Tool]:
-        tools = [as_tool(self.search), as_tool(self.read_doc)]
-        if depth < self.max_subagent_depth:
-            tools.append(as_tool(self._make_nested_knowledge_subagent(depth + 1)))
-        return tools
+    def _ensure_thread_llm_logging(self) -> None:
+        """ContextVars do not cross ThreadPoolExecutor workers automatically."""
+        set_llm_log_dir(self.logger.run_dir / "llm_calls")
+        set_llm_log_mode("all")
 
-    def search(self, query: str, top_k: int = 10) -> str:
+    def _turns(self, max_turns: int | None) -> Iterable[int]:
+        if max_turns is None:
+            return count()
+        return range(max_turns)
+
+    def _subagent_tools(self, depth: int) -> list[Tool]:
+        return [as_tool(self.search), as_tool(self.read_doc)]
+
+    def search(self, query: str | list[str], top_k: int = 10) -> str:
         """Search banking knowledge documents.
 
         Returns only document ids, titles, and summaries. Use read_doc with a
         doc_id to inspect the full policy text.
 
         Args:
-            query: Natural language search query.
+            query: Natural language search query, or up to 3 related queries.
             top_k: Maximum number of documents to return.
 
         Returns:
             Matching document summaries.
         """
-        hits = self.retriever.search(query=query, top_k=top_k)
+        queries, was_truncated = self._normalize_search_queries(query)
+        if not queries:
+            return "No search query provided."
+
+        hits = self.retriever.search(query=queries, top_k=top_k)
         self.logger.log(
             "kb_search",
-            query=query,
+            query=queries[0] if len(queries) == 1 else queries,
+            query_count=len(queries),
+            truncated=was_truncated,
             top_k=top_k,
             doc_ids=[hit.doc_id for hit in hits],
         )
-        return self.retriever.format_search_results(hits)
+        result = self.retriever.format_search_results(hits)
+        if was_truncated:
+            result = (
+                "Note: search accepts at most 3 queries per call; extra queries "
+                "were ignored.\n\n"
+                + result
+            )
+        return result
+
+    def _normalize_search_queries(self, query: str | list[str]) -> tuple[list[str], bool]:
+        if isinstance(query, str):
+            raw_queries = [query]
+        else:
+            raw_queries = query
+
+        queries = [
+            str(one_query).strip()
+            for one_query in raw_queries
+            if str(one_query).strip()
+        ]
+        was_truncated = len(queries) > 3
+        queries = queries[:3]
+        return queries, was_truncated
 
     def read_doc(self, doc_id: str) -> str:
         """Read one full banking knowledge document by document id.
@@ -350,7 +553,8 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
             return f"Error: {exc}"
 
         self.logger.log("kb_read", doc_id=doc_id, char_count=len(content))
-        self._read_docs[doc_id] = content
+        with self._state_lock:
+            self._read_docs[doc_id] = content
         return content
 
     def knowledge_evidence_report(self) -> dict:
@@ -364,25 +568,6 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
             "tool_evidence": tool_evidence,
         }
 
-    def _make_nested_knowledge_subagent(self, next_depth: int):
-        def ask_knowledge_subagent(question: str, context: str = "") -> str:
-            """Delegate a narrow KB research subproblem one level deeper.
-
-            Args:
-                question: The narrow policy question to research.
-                context: Useful context from the current subagent.
-
-            Returns:
-                A compact research note.
-            """
-            return self._run_subagent(
-                question=question,
-                context=context,
-                depth=next_depth,
-            )
-
-        return ask_knowledge_subagent
-
     def _execute_internal_tool_calls(
         self, assistant_message: AssistantMessage
     ) -> list[ToolMessage]:
@@ -390,8 +575,8 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
         for tool_call in assistant_message.tool_calls or []:
             if tool_call.name not in self._internal_tool_names:
                 content = (
-                    "Error: ask_knowledge_subagent was mixed with banking tools. "
-                    "Call the knowledge subagent first, then call banking tools in a later turn."
+                    f"Error: {self._knowledge_tool_name()} was mixed with banking tools. "
+                    "Call the knowledge subagents first, then call banking tools in a later turn."
                 )
                 error = True
             else:
@@ -424,6 +609,14 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
                         context=arguments.get("context", ""),
                     )
                 )
+            if name == "ask_knowledge_subagents":
+                content, error = self._run_subagent_batch(
+                    arguments.get("requests", [])
+                )
+                return InternalToolResult(
+                    content,
+                    error,
+                )
             return InternalToolResult(f"Error: unknown internal tool {name}", True)
         except Exception as exc:
             self.logger.log("internal_tool_error", tool=name, error=str(exc))
@@ -443,14 +636,6 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
             if name == "read_doc":
                 return InternalToolResult(
                     self.read_doc(doc_id=arguments.get("doc_id", ""))
-                )
-            if name == "ask_knowledge_subagent" and depth < self.max_subagent_depth:
-                return InternalToolResult(
-                    self._run_subagent(
-                        question=arguments.get("question", ""),
-                        context=arguments.get("context", ""),
-                        depth=depth + 1,
-                    )
                 )
             return InternalToolResult(f"Error: tool {name} is not available here.", True)
         except Exception as exc:
@@ -500,6 +685,7 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
     def _is_safe_after_policy_lookup_failure(self, tool_name: str) -> bool:
         return tool_name in {
             "ask_knowledge_subagent",
+            "ask_knowledge_subagents",
             "transfer_to_human_agents",
             "get_current_time",
             "get_user_information_by_id",
@@ -548,3 +734,8 @@ class PlannerSubagentAgent(LLMConfigMixin, HalfDuplexAgent[PlannerState]):
 
     def _extract_tool_like_names(self, text: str) -> set[str]:
         return set(re.findall(r"\b[a-z][a-z0-9]+(?:_[a-z0-9]+){2,}\b", text))
+
+    def _knowledge_tool_name(self) -> str:
+        if self.subagent_delegation == "single":
+            return "ask_knowledge_subagent"
+        return "ask_knowledge_subagents"

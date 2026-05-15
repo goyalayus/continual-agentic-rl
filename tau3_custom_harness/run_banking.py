@@ -9,6 +9,7 @@ import os
 import sys
 import traceback
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_DIR = REPO_ROOT / "src"
@@ -41,6 +42,12 @@ def parse_args() -> argparse.Namespace:
         "--subagent-model",
         default=os.environ.get("TAU3_SUBAGENT_MODEL"),
         help="Defaults to --agent-model.",
+    )
+    parser.add_argument(
+        "--subagent-delegation",
+        choices=["single", "batch"],
+        default=os.environ.get("TAU3_SUBAGENT_DELEGATION", "batch"),
+        help="Knowledge delegation surface exposed to the planner.",
     )
     parser.add_argument(
         "--temperature",
@@ -78,6 +85,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Fail the run if optional S3 upload fails.",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Optional per-simulation wallclock timeout in seconds.",
+    )
     parser.add_argument("--skip-eval", action="store_true")
     return parser.parse_args()
 
@@ -107,34 +120,55 @@ def safe_log_dict(value: dict) -> dict:
     return redacted
 
 
-def main() -> int:
-    args = parse_args()
-    task = next((item for item in get_tasks() if item.id == args.task_id), None)
+def run_banking_task(
+    *,
+    task_id: str,
+    max_steps: int,
+    max_errors: int,
+    seed: int,
+    agent_model: str,
+    user_model: str,
+    subagent_model: str | None,
+    subagent_delegation: str,
+    temperature: float,
+    agent_llm_args_json: str | None,
+    user_llm_args_json: str | None,
+    subagent_llm_args_json: str | None,
+    log_dir: Path,
+    run_id: str | None = None,
+    s3_uri: str | None = None,
+    s3_strict: bool = False,
+    skip_eval: bool = False,
+    timeout: float | None = None,
+) -> dict[str, Any]:
+    """Run one banking task in the current process."""
+    task = next((item for item in get_tasks() if item.id == task_id), None)
     if task is None:
         available = ", ".join(t.id for t in get_tasks()[:10])
-        raise SystemExit(f"Unknown task id {args.task_id}. First available: {available}")
+        raise ValueError(f"Unknown task id {task_id}. First available: {available}")
 
-    logger = HarnessLogger(log_dir=args.log_dir, run_id=args.run_id)
+    logger = HarnessLogger(log_dir=log_dir, run_id=run_id)
     agent = None
     set_llm_log_dir(logger.run_dir / "llm_calls")
     set_llm_log_mode("all")
     try:
         agent_llm_args = llm_args_from_json(
-            args.agent_llm_args_json, temperature=args.temperature
+            agent_llm_args_json, temperature=temperature
         )
         user_llm_args = llm_args_from_json(
-            args.user_llm_args_json, temperature=args.temperature
+            user_llm_args_json, temperature=temperature
         )
         subagent_llm_args = llm_args_from_json(
-            args.subagent_llm_args_json, temperature=args.temperature
+            subagent_llm_args_json, temperature=temperature
         )
 
         logger.log(
             "run_start",
             task_id=task.id,
-            agent_model=args.agent_model,
-            user_model=args.user_model,
-            subagent_model=args.subagent_model or args.agent_model,
+            agent_model=agent_model,
+            user_model=user_model,
+            subagent_model=subagent_model or agent_model,
+            subagent_delegation=subagent_delegation,
             agent_llm_args=safe_log_dict(agent_llm_args),
             user_llm_args=safe_log_dict(user_llm_args),
             subagent_llm_args=safe_log_dict(subagent_llm_args),
@@ -142,20 +176,24 @@ def main() -> int:
 
         environment = get_environment(retrieval_variant="no_knowledge", task=task)
         retriever = BankingHybridRetriever(event_logger=logger.log)
+        user_tools = environment.get_user_tools(include=task.user_tools)
         agent = PlannerSubagentAgent(
             tools=environment.get_tools(),
             domain_policy=environment.get_policy(),
-            llm=args.agent_model,
+            llm=agent_model,
             llm_args=agent_llm_args,
-            subagent_llm=args.subagent_model or args.agent_model,
+            subagent_llm=subagent_model or agent_model,
             subagent_llm_args=subagent_llm_args,
             retriever=retriever,
+            kb_document_count=len(retriever.docs),
+            default_user_tools=user_tools,
+            subagent_delegation=subagent_delegation,
             logger_=logger,
         )
         user = SafeUserSimulator(
-            tools=environment.get_user_tools(include=task.user_tools) or None,
+            tools=user_tools or None,
             instructions=str(task.user_scenario),
-            llm=args.user_model,
+            llm=user_model,
             llm_args=user_llm_args,
             logger_=logger,
         )
@@ -165,15 +203,16 @@ def main() -> int:
             user=user,
             environment=environment,
             task=task,
-            max_steps=args.max_steps,
-            max_errors=args.max_errors,
-            seed=args.seed,
+            max_steps=max_steps,
+            max_errors=max_errors,
+            seed=seed,
             simulation_id=logger.run_id,
+            timeout=timeout,
             validate_communication=True,
         )
 
         env_kwargs = {"retrieval_variant": "no_knowledge", "task": task}
-        if args.skip_eval:
+        if skip_eval:
             simulation = orchestrator.run()
             simulation.policy = orchestrator.environment.get_policy()
             simulation.reward_info = None
@@ -205,11 +244,10 @@ def main() -> int:
             output_path=str(output_path),
             evidence_path=str(evidence_path),
         )
-        print(json.dumps(result, indent=2), flush=True)
 
-        if args.s3_uri:
-            logger.sync_to_s3(args.s3_uri, strict=args.s3_strict)
-        return 0
+        if s3_uri:
+            logger.sync_to_s3(s3_uri, strict=s3_strict)
+        return result
     except Exception as exc:
         tb = traceback.format_exc()
         logger.log("run_error", task_id=task.id, error=str(exc), traceback=tb)
@@ -222,12 +260,41 @@ def main() -> int:
         if agent is not None:
             error_payload["kb_evidence"] = agent.knowledge_evidence_report()
         logger.write_json("run_error.json", error_payload)
-        if args.s3_uri:
-            logger.sync_to_s3(args.s3_uri, strict=False)
+        if s3_uri:
+            logger.sync_to_s3(s3_uri, strict=False)
         raise
     finally:
         set_llm_log_dir(None)
         set_llm_log_mode("latest")
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        result = run_banking_task(
+            task_id=args.task_id,
+            max_steps=args.max_steps,
+            max_errors=args.max_errors,
+            seed=args.seed,
+            agent_model=args.agent_model,
+            user_model=args.user_model,
+            subagent_model=args.subagent_model,
+            subagent_delegation=args.subagent_delegation,
+            temperature=args.temperature,
+            agent_llm_args_json=args.agent_llm_args_json,
+            user_llm_args_json=args.user_llm_args_json,
+            subagent_llm_args_json=args.subagent_llm_args_json,
+            log_dir=args.log_dir,
+            run_id=args.run_id,
+            s3_uri=args.s3_uri,
+            s3_strict=args.s3_strict,
+            skip_eval=args.skip_eval,
+            timeout=args.timeout,
+        )
+        print(json.dumps(result, indent=2), flush=True)
+        return 0
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":

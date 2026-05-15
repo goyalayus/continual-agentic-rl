@@ -1,0 +1,26 @@
+# Generated benchmark traces and audit artifacts can contain hidden expected
+# actions, tool names, customer PII, account ids, transaction ids, and provider
+# errors. Keep them local unless intentionally redacted.
+*.stdout.log
+*.nohup
+*.pid
+*.status
+*.tsv
+invalid_azure_partial/
+comparison_summary.csv
+comparison_summary.json
+postfix_comparison_summary.csv
+postfix_comparison_summary.json
+failure_packets/
+failure_packets_incomplete/
+failure_audit.md
+failure_audit.json
+generic_fix_input.md
+generic_fix_input.json
+compile_test_packets/
+compile_test_audit.md
+compile_test_audit.json
+__pycache__/
+.env
+.env.local
+openrouter.env

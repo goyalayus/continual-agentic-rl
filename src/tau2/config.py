@@ -1,3 +1,5 @@
+import os
+
 # =============================================================================
 # SIMULATION DEFAULTS (overridable via CLI)
 # =============================================================================
@@ -21,15 +23,33 @@ DEFAULT_LLM_TEMPERATURE_USER = 0.0
 DEFAULT_LLM_ARGS_AGENT = {"temperature": DEFAULT_LLM_TEMPERATURE_AGENT}
 DEFAULT_LLM_ARGS_USER = {"temperature": DEFAULT_LLM_TEMPERATURE_USER}
 
-DEFAULT_LLM_NL_ASSERTIONS = "gpt-4.1-2025-04-14"
+DEFAULT_LLM_NL_ASSERTIONS = os.environ.get(
+    "TAU2_DEFAULT_LLM_NL_ASSERTIONS", "gpt-4.1-2025-04-14"
+)
 DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE = 0.0
-DEFAULT_LLM_NL_ASSERTIONS_ARGS = {"temperature": DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE}
 
-DEFAULT_LLM_ENV_INTERFACE = "gpt-4.1-2025-04-14"
+DEFAULT_LLM_ENV_INTERFACE = os.environ.get(
+    "TAU2_DEFAULT_LLM_ENV_INTERFACE", "gpt-4.1-2025-04-14"
+)
 DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE = 0.0
-DEFAULT_LLM_ENV_INTERFACE_ARGS = {"temperature": DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE}
 
-DEFAULT_LLM_EVAL_USER_SIMULATOR = "claude-opus-4-5"
+DEFAULT_LLM_EVAL_USER_SIMULATOR = os.environ.get(
+    "TAU2_DEFAULT_LLM_EVAL_USER_SIMULATOR", "claude-opus-4-5"
+)
+
+
+def _default_llm_args(model: str, temperature: float) -> dict:
+    if model.startswith("azure/gpt-5.5"):
+        return {}
+    return {"temperature": temperature}
+
+
+DEFAULT_LLM_NL_ASSERTIONS_ARGS = _default_llm_args(
+    DEFAULT_LLM_NL_ASSERTIONS, DEFAULT_LLM_NL_ASSERTIONS_TEMPERATURE
+)
+DEFAULT_LLM_ENV_INTERFACE_ARGS = _default_llm_args(
+    DEFAULT_LLM_ENV_INTERFACE, DEFAULT_LLM_ENV_INTERFACE_TEMPERATURE
+)
 
 # LLM debug logging
 DEFAULT_LLM_LOG_MODE = "latest"  # Options: "all", "latest"

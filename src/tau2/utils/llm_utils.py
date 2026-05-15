@@ -12,7 +12,7 @@ from typing import Any, Optional
 
 import httpx
 import litellm
-from litellm import completion, completion_cost
+from litellm import completion, completion_cost, responses
 from litellm.caching.caching import Cache
 from litellm.main import ModelResponse, Usage
 from loguru import logger
@@ -48,8 +48,15 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-# Configure httpx connection limits for LiteLLM
-httpx_limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
+# Configure httpx connection limits for LiteLLM. The benchmark can run hundreds
+# of independent simulations in one process, so the default 10-connection pool
+# is too small for the Responses API path.
+httpx_limits = httpx.Limits(
+    max_keepalive_connections=int(
+        os.environ.get("TAU2_LITELLM_MAX_KEEPALIVE_CONNECTIONS", "128")
+    ),
+    max_connections=int(os.environ.get("TAU2_LITELLM_MAX_CONNECTIONS", "512")),
+)
 litellm.client_session = httpx.Client(limits=httpx_limits)
 litellm.aclient_session = httpx.AsyncClient(limits=httpx_limits)
 
@@ -126,6 +133,17 @@ def get_response_cost(response: ModelResponse) -> float:
     try:
         cost = completion_cost(completion_response=response)
     except Exception as e:
+        usage = response.get("usage")
+        if usage is None:
+            logger.error(e)
+            return 0.0
+        if isinstance(usage, dict):
+            fallback_cost = float(usage.get("cost") or 0.0)
+        else:
+            fallback_cost = float(getattr(usage, "cost", 0.0) or 0.0)
+        if fallback_cost:
+            logger.warning(f"Using provider-reported response cost fallback: {e}")
+            return fallback_cost
         logger.error(e)
         return 0.0
     return cost
@@ -206,6 +224,222 @@ def to_litellm_messages(messages: list[Message]) -> list[dict]:
         elif isinstance(message, SystemMessage):
             litellm_messages.append({"role": "system", "content": message.content})
     return litellm_messages
+
+
+def _uses_responses_api(model: str, kwargs: dict[str, Any]) -> bool:
+    """
+    Azure GPT-5.5 does not support function tools plus reasoning_effort through
+    chat completions. The Responses API supports that combination.
+    """
+    return model.startswith("azure/gpt-5.5")
+
+
+def _to_responses_tool_schema(tool_schema: dict) -> dict:
+    function_schema = tool_schema.get("function", {})
+    return {
+        "type": "function",
+        "name": function_schema.get("name"),
+        "description": function_schema.get("description") or "",
+        "parameters": function_schema.get("parameters") or {},
+    }
+
+
+def _to_responses_input(messages: list[Message]) -> tuple[list[dict], Optional[str]]:
+    input_items: list[dict] = []
+    instructions: list[str] = []
+
+    for message in messages:
+        if isinstance(message, SystemMessage):
+            if message.content:
+                instructions.append(message.content)
+        elif isinstance(message, UserMessage):
+            input_items.append({"role": "user", "content": message.content or ""})
+        elif isinstance(message, AssistantMessage):
+            if message.content:
+                input_items.append(
+                    {"role": "assistant", "content": message.content}
+                )
+            if message.is_tool_call():
+                for tool_call in message.tool_calls or []:
+                    input_items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": tool_call.id,
+                            "name": tool_call.name,
+                            "arguments": json.dumps(tool_call.arguments),
+                        }
+                    )
+        elif isinstance(message, ToolMessage):
+            input_items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": message.id,
+                    "output": message.content or "",
+                }
+            )
+
+    instruction_text = "\n\n".join(instructions) if instructions else None
+    return input_items, instruction_text
+
+
+def _response_to_dict(response: Any) -> dict:
+    if hasattr(response, "model_dump"):
+        return response.model_dump()
+    if hasattr(response, "to_dict"):
+        return response.to_dict()
+    if isinstance(response, dict):
+        return response
+    return dict(response)
+
+
+def _response_usage_from_dict(raw_response: dict) -> Optional[dict]:
+    usage = raw_response.get("usage")
+    if usage is None:
+        return None
+    if not isinstance(usage, dict):
+        usage = usage.model_dump() if hasattr(usage, "model_dump") else dict(usage)
+
+    input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+    output_tokens = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+    total_tokens = usage.get("total_tokens") or input_tokens + output_tokens
+    output_details = usage.get("output_tokens_details") or {}
+    if not isinstance(output_details, dict):
+        output_details = (
+            output_details.model_dump()
+            if hasattr(output_details, "model_dump")
+            else dict(output_details)
+        )
+
+    parsed_usage = {
+        "completion_tokens": output_tokens,
+        "prompt_tokens": input_tokens,
+        "total_tokens": total_tokens,
+    }
+    reasoning_tokens = output_details.get("reasoning_tokens")
+    if reasoning_tokens is not None:
+        parsed_usage["reasoning_tokens"] = reasoning_tokens
+    return parsed_usage
+
+
+def _extract_responses_content_and_tools(
+    raw_response: dict,
+) -> tuple[str | None, list[ToolCall] | None]:
+    content_parts: list[str] = []
+    tool_calls: list[ToolCall] = []
+
+    for item in raw_response.get("output", []) or []:
+        item_type = item.get("type")
+        if item_type == "message":
+            for part in item.get("content", []) or []:
+                if part.get("type") in {"output_text", "text"} and part.get("text"):
+                    content_parts.append(part["text"])
+        elif item_type == "function_call":
+            raw_arguments = item.get("arguments") or "{}"
+            try:
+                arguments = json.loads(raw_arguments)
+            except json.JSONDecodeError:
+                arguments = {"raw_arguments": raw_arguments}
+            tool_calls.append(
+                ToolCall(
+                    id=item.get("call_id") or item.get("id") or "",
+                    name=item["name"],
+                    arguments=arguments,
+                )
+            )
+
+    content = "\n".join(content_parts).strip() or None
+    return content, tool_calls or None
+
+
+def _responses_kwargs(model: str, kwargs: dict[str, Any]) -> dict[str, Any]:
+    responses_kwargs = dict(kwargs)
+    if "max_tokens" in responses_kwargs and "max_output_tokens" not in responses_kwargs:
+        responses_kwargs["max_output_tokens"] = responses_kwargs.pop("max_tokens")
+    if "reasoning_effort" in responses_kwargs and "reasoning" not in responses_kwargs:
+        responses_kwargs["reasoning"] = {
+            "effort": responses_kwargs.pop("reasoning_effort")
+        }
+    if model.startswith("azure/"):
+        responses_kwargs.setdefault(
+            "api_base",
+            os.environ.get("AZURE_OPENAI_ENDPOINT") or os.environ.get("AZURE_API_BASE"),
+        )
+        responses_kwargs.setdefault(
+            "api_version",
+            os.environ.get("AZURE_OPENAI_API_VERSION")
+            or os.environ.get("AZURE_API_VERSION"),
+        )
+    responses_kwargs.pop("num_retries", None)
+    return responses_kwargs
+
+
+def _is_retryable_responses_error(exc: BaseException) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    non_retryable_patterns = (
+        "authenticationerror",
+        "api_key",
+        "badrequesterror",
+        "content_filter",
+        "contentpolicyviolation",
+        "content policy",
+        "cyber_policy",
+        "quota",
+        "credit",
+        "billing",
+        "invalid_request",
+        "invalid message",
+    )
+    if any(pattern in text for pattern in non_retryable_patterns):
+        return False
+
+    retryable_patterns = (
+        "ratelimiterror",
+        "too many requests",
+        "too_many_requests",
+        "status code: 429",
+        "status_code=429",
+        "bad file descriptor",
+        "server disconnected without sending a response",
+        "connection reset by peer",
+        "wrong version number",
+        "server_error",
+        "internal server error",
+        "readerror",
+        "remoteprotocolerror",
+        "connecterror",
+        "timeout",
+        "temporarily unavailable",
+    )
+    return any(pattern in text for pattern in retryable_patterns)
+
+
+def _responses_retry_wait_seconds(exc: BaseException, attempt: int) -> float:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    if (
+        "ratelimiterror" in text
+        or "too many requests" in text
+        or "too_many_requests" in text
+        or "429" in text
+    ):
+        return min(60.0, 10.0 * attempt)
+    return min(10.0, 0.5 * (2 ** (attempt - 1)))
+
+
+def _call_responses_with_retry(max_retries: int, **response_kwargs: Any) -> Any:
+    attempts = max(1, max_retries + 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            return responses(**response_kwargs)
+        except Exception as exc:
+            if attempt >= attempts or not _is_retryable_responses_error(exc):
+                logger.error(exc)
+                raise
+            wait_seconds = _responses_retry_wait_seconds(exc, attempt)
+            logger.warning(
+                "Responses API transient error; retrying "
+                f"{attempt}/{max_retries} after {wait_seconds:.1f}s: {exc}"
+            )
+            time.sleep(wait_seconds)
 
 
 def validate_message(message: Message) -> None:
@@ -385,17 +619,33 @@ def generate(
     ):
         os.environ["VERTEXAI_LOCATION"] = "global"
 
-    litellm_messages = to_litellm_messages(messages)
     tools_schema = [tool.openai_schema for tool in tools] if tools else None
     if tools_schema and tool_choice is None:
         tool_choice = "auto"
+
+    litellm_messages = to_litellm_messages(messages)
+    use_responses_api = _uses_responses_api(model, kwargs)
+    responses_input = None
+    responses_instructions = None
+    responses_tools = None
+    if use_responses_api:
+        responses_input, responses_instructions = _to_responses_input(messages)
+        responses_tools = (
+            [_to_responses_tool_schema(tool_schema) for tool_schema in tools_schema]
+            if tools_schema
+            else None
+        )
 
     # Prepare request data for logging
     formatted_messages = _format_messages_for_logging(litellm_messages)
     request_data = {
         "model": model,
+        "api": "responses" if use_responses_api else "chat_completions",
         "messages": formatted_messages,
+        "responses_input": responses_input,
+        "instructions": responses_instructions,
         "tools": tools_schema,
+        "responses_tools": responses_tools,
         "tool_choice": tool_choice,
         "kwargs": {
             k: str(v) if not isinstance(v, (str, int, float, bool, type(None))) else v
@@ -405,43 +655,113 @@ def generate(
     request_timestamp = datetime.now().isoformat()
 
     start_time = time.perf_counter()
-    try:
-        response = completion(
+    if use_responses_api:
+        response_kwargs = _responses_kwargs(model, kwargs)
+        response = _call_responses_with_retry(
+            max_retries=int(kwargs.get("num_retries") or 0),
             model=model,
-            messages=litellm_messages,
-            tools=tools_schema,
-            tool_choice=tool_choice,
-            **kwargs,
+            input=responses_input,
+            instructions=responses_instructions,
+            tools=responses_tools,
+            tool_choice=tool_choice if responses_tools else None,
+            **response_kwargs,
         )
-    except Exception as e:
-        logger.error(e)
-        raise e
-    generation_time_seconds = time.perf_counter() - start_time
-    cost = get_response_cost(response)
-    usage = get_response_usage(response)
+        generation_time_seconds = time.perf_counter() - start_time
+        raw_response = _response_to_dict(response)
+        usage = _response_usage_from_dict(raw_response)
+        cost = float((raw_response.get("usage") or {}).get("cost") or 0.0)
+        content, tool_calls = _extract_responses_content_and_tools(raw_response)
 
-    response_choice = response.choices[0]
-    try:
-        finish_reason = response_choice.finish_reason
-        if finish_reason == "length":
-            logger.warning("Output might be incomplete due to token limit!")
-    except Exception as e:
-        logger.error(e)
-        raise e
-    assert response_choice.message.role == "assistant", (
-        "The response should be an assistant message"
-    )
-    content = response_choice.message.content
-    raw_tool_calls = response_choice.message.tool_calls or []
-    tool_calls = [
-        ToolCall(
-            id=tool_call.id,
-            name=tool_call.function.name,
-            arguments=json.loads(tool_call.function.arguments),
+        response_data = {
+            "timestamp": datetime.now().isoformat(),
+            "content": content,
+            "tool_calls": [tc.model_dump() for tc in tool_calls]
+            if tool_calls
+            else None,
+            "cost": cost,
+            "usage": usage,
+            "generation_time_seconds": generation_time_seconds,
+            "raw_data": raw_response,
+        }
+        if usage and usage.get("reasoning_tokens") is not None:
+            response_data["reasoning_tokens"] = usage["reasoning_tokens"]
+    else:
+        try:
+            response = completion(
+                model=model,
+                messages=litellm_messages,
+                tools=tools_schema,
+                tool_choice=tool_choice,
+                **kwargs,
+            )
+        except Exception as e:
+            logger.error(e)
+            raise e
+        generation_time_seconds = time.perf_counter() - start_time
+        cost = get_response_cost(response)
+        usage = get_response_usage(response)
+
+        response_choice = response.choices[0]
+        try:
+            finish_reason = response_choice.finish_reason
+            if finish_reason == "length":
+                logger.warning("Output might be incomplete due to token limit!")
+        except Exception as e:
+            logger.error(e)
+            raise e
+        assert response_choice.message.role == "assistant", (
+            "The response should be an assistant message"
         )
-        for tool_call in raw_tool_calls
-    ]
-    tool_calls = tool_calls or None
+        content = response_choice.message.content
+        raw_tool_calls = response_choice.message.tool_calls or []
+        tool_calls = [
+            ToolCall(
+                id=tool_call.id,
+                name=tool_call.function.name,
+                arguments=json.loads(tool_call.function.arguments),
+            )
+            for tool_call in raw_tool_calls
+        ]
+        tool_calls = tool_calls or None
+        raw_response = response.to_dict()
+
+        # Log complete LLM call (request + response)
+        response_data = {
+            "timestamp": datetime.now().isoformat(),
+            "content": content,
+            "tool_calls": [tc.model_dump() for tc in tool_calls]
+            if tool_calls
+            else None,
+            "cost": cost,
+            "usage": usage,
+            "generation_time_seconds": generation_time_seconds,
+            "raw_data": raw_response,
+        }
+        raw_message = raw_response.get("choices", [{}])[0].get("message", {})
+        provider_fields = raw_message.get("provider_specific_fields") or {}
+        reasoning = (
+            getattr(response_choice.message, "reasoning", None)
+            or getattr(response_choice.message, "reasoning_content", None)
+            or raw_message.get("reasoning")
+            or raw_message.get("reasoning_content")
+            or provider_fields.get("reasoning")
+            or provider_fields.get("reasoning_content")
+        )
+        reasoning_details = (
+            getattr(response_choice.message, "reasoning_details", None)
+            or raw_message.get("reasoning_details")
+            or provider_fields.get("reasoning_details")
+        )
+        if reasoning is not None:
+            response_data["reasoning"] = reasoning
+        if reasoning_details is not None:
+            response_data["reasoning_details"] = reasoning_details
+        try:
+            reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
+        except AttributeError:
+            reasoning_tokens = None
+        if reasoning_tokens is not None:
+            response_data["reasoning_tokens"] = reasoning_tokens
 
     message = AssistantMessage(
         role="assistant",
@@ -449,19 +769,10 @@ def generate(
         tool_calls=tool_calls,
         cost=cost,
         usage=usage,
-        raw_data=response.to_dict(),
+        raw_data=raw_response,
         generation_time_seconds=generation_time_seconds,
     )
 
-    # Log complete LLM call (request + response)
-    response_data = {
-        "timestamp": datetime.now().isoformat(),
-        "content": content,
-        "tool_calls": [tc.model_dump() for tc in tool_calls] if tool_calls else None,
-        "cost": cost,
-        "usage": usage,
-        "generation_time_seconds": generation_time_seconds,
-    }
     # Add timestamp to request data
     request_data["timestamp"] = request_timestamp
     _write_llm_log(request_data, response_data, call_name=call_name)

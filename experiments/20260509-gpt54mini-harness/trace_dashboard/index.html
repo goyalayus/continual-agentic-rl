@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tau3 Agentic Trace Dashboard</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">T3</div>
+          <div>
+            <div class="eyebrow">Agentic Trace</div>
+            <h1>Task 006</h1>
+          </div>
+        </div>
+
+        <div class="summary-grid" id="summary-grid"></div>
+
+        <label class="filter-box">
+          <span>Filter trace</span>
+          <input id="trace-filter" type="search" placeholder="planner, EcoCard, read_doc..." />
+        </label>
+      </aside>
+
+      <main class="main">
+        <section class="hero-panel">
+          <div>
+            <div class="eyebrow">Custom Harness Run</div>
+            <h2 id="run-title">Loading trace...</h2>
+          </div>
+          <div class="hero-actions">
+            <button id="expand-all" class="button">Open all</button>
+            <button id="collapse-all" class="button secondary">Close all</button>
+          </div>
+        </section>
+
+        <section id="agentic-section" class="panel trace-section active-section">
+          <div class="panel-head">
+            <div>
+              <div class="eyebrow">Agent Trace Only</div>
+              <h3>Main Agent And KB Subagents</h3>
+            </div>
+            <p>Main-agent calls are sequential. KB subagent runs are nested under the planner call that asked for them.</p>
+          </div>
+          <div id="agent-tree" class="tree"></div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js?v=20260512-obs-null-fix"></script>
+  </body>
+</html>

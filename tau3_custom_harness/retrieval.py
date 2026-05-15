@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
 import re
-import hashlib
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
+from threading import RLock
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -49,6 +50,24 @@ class SearchHit:
     doc_id: str
     title: str
     summary: str
+
+
+@dataclass(frozen=True)
+class _IndexBundle:
+    docs: list[dict[str, Any]]
+    chunks: list[dict[str, Any]]
+    manifest: dict[str, Any]
+    chunk_ids: list[str]
+    summaries: dict[str, Any]
+    embeddings: np.ndarray
+    docs_by_id: dict[str, dict[str, Any]]
+    chunks_by_id: dict[str, dict[str, Any]]
+    chunk_by_position: list[dict[str, Any]]
+    bm25: "SimpleBM25"
+
+
+_INDEX_BUNDLE_CACHE: dict[tuple[str, str], _IndexBundle] = {}
+_INDEX_BUNDLE_LOCK = RLock()
 
 
 class SimpleBM25:
@@ -113,6 +132,29 @@ class BankingHybridRetriever:
         self.event_logger = event_logger
         self._embedding_disabled_logged = False
 
+        bundle = self._shared_index_bundle()
+        self.docs = bundle.docs
+        self.chunks = bundle.chunks
+        self.manifest = bundle.manifest
+        self.chunk_ids = bundle.chunk_ids
+        self.summaries = bundle.summaries
+        self.embeddings = bundle.embeddings
+        self.docs_by_id = bundle.docs_by_id
+        self.chunks_by_id = bundle.chunks_by_id
+        self.chunk_by_position = bundle.chunk_by_position
+        self._bm25 = bundle.bm25
+        self._query_embedding_cache: dict[str, np.ndarray | None] = {}
+
+    def _shared_index_bundle(self) -> _IndexBundle:
+        cache_key = (str(self.index_dir.resolve()), self.embedding_model)
+        with _INDEX_BUNDLE_LOCK:
+            bundle = _INDEX_BUNDLE_CACHE.get(cache_key)
+            if bundle is None:
+                bundle = self._load_index_bundle()
+                _INDEX_BUNDLE_CACHE[cache_key] = bundle
+            return bundle
+
+    def _load_index_bundle(self) -> _IndexBundle:
         self.docs = self._load_jsonl("docs.jsonl")
         self.chunks = self._load_jsonl("chunks.jsonl")
         self.manifest = json.loads((self.index_dir / "manifest.json").read_text())
@@ -120,7 +162,7 @@ class BankingHybridRetriever:
         self.summaries = json.loads(
             (self.index_dir / "summaries_by_doc_id.json").read_text()
         )
-        self.embeddings = np.load(self.index_dir / "embeddings.npy")
+        self.embeddings = np.load(self.index_dir / "embeddings.npy", mmap_mode="r")
 
         self.docs_by_id = {doc["doc_id"]: doc for doc in self.docs}
         self.chunks_by_id = {chunk["chunk_id"]: chunk for chunk in self.chunks}
@@ -135,13 +177,56 @@ class BankingHybridRetriever:
                 for chunk in self.chunk_by_position
             ]
         )
-        self._query_embedding_cache: dict[str, np.ndarray | None] = {}
+        return _IndexBundle(
+            docs=self.docs,
+            chunks=self.chunks,
+            manifest=self.manifest,
+            chunk_ids=self.chunk_ids,
+            summaries=self.summaries,
+            embeddings=self.embeddings,
+            docs_by_id=self.docs_by_id,
+            chunks_by_id=self.chunks_by_id,
+            chunk_by_position=self.chunk_by_position,
+            bm25=self._bm25,
+        )
 
-    def search(self, query: str, top_k: int = 10) -> list[SearchHit]:
+    def search(self, query: str | list[str], top_k: int = 10) -> list[SearchHit]:
+        queries = self._normalize_queries(query)
+        if not queries:
+            return []
+
+        top_k = self._clamp_top_k(top_k)
+        if len(queries) == 1:
+            return self._search_one(queries[0], top_k)
+
+        merged: dict[str, dict[str, Any]] = {}
+        for query_index, one_query in enumerate(queries):
+            for rank, hit in enumerate(self._search_one(one_query, top_k), start=1):
+                if hit.doc_id not in merged:
+                    merged[hit.doc_id] = {
+                        "hit": hit,
+                        "match_count": 0,
+                        "best_rank": rank,
+                        "first_query_index": query_index,
+                    }
+                row = merged[hit.doc_id]
+                row["match_count"] += 1
+                row["best_rank"] = min(row["best_rank"], rank)
+
+        ranked = sorted(
+            merged.values(),
+            key=lambda row: (
+                -row["match_count"],
+                row["best_rank"],
+                row["first_query_index"],
+            ),
+        )
+        return [row["hit"] for row in ranked[:top_k]]
+
+    def _search_one(self, query: str, top_k: int) -> list[SearchHit]:
         query = query.strip()
         if not query:
             return []
-        top_k = self._clamp_top_k(top_k)
 
         expanded_query = self._expand_query(query)
         bm25_scores = self._bm25.score(self._tokenize(expanded_query))
@@ -164,6 +249,13 @@ class BankingHybridRetriever:
                 break
 
         return hits
+
+    def _normalize_queries(self, query: str | list[str]) -> list[str]:
+        if isinstance(query, str):
+            raw_queries = [query]
+        else:
+            raw_queries = query[:3]
+        return [one_query.strip() for one_query in raw_queries if one_query.strip()]
 
     def read_doc(self, doc_id: str) -> str:
         doc_id = doc_id.strip()
@@ -282,7 +374,11 @@ class BankingHybridRetriever:
     def _normalize_embeddings(self) -> None:
         norms = np.linalg.norm(self.embeddings, axis=1, keepdims=True)
         norms[norms == 0] = 1
-        self.embeddings = self.embeddings / norms
+        if np.allclose(norms, 1.0, rtol=1e-4, atol=1e-6):
+            if self.embeddings.dtype != np.float32:
+                self.embeddings = self.embeddings.astype(np.float32)
+            return
+        self.embeddings = (self.embeddings / norms).astype(np.float32)
 
     def _hit_for_doc(self, doc_id: str) -> SearchHit:
         summary_row = self.summaries[doc_id]

@@ -501,8 +501,18 @@ class KnowledgeTools(ToolKitBase):
     ) -> str:
         """Log a verification record after successfully verifying a user's identity.
 
-        Call this tool after you have verified a user by confirming 2 out of 4 identity fields
-        (date of birth, email, phone number, address). This creates an audit record of the verification.
+        Call this tool only after the customer has personally provided enough
+        identity information to verify the account. At least two of these four
+        fields must have been confirmed from customer-provided information:
+        date of birth, email, phone number, address.
+
+        Do not count values copied from database/tool output as customer-provided
+        verification evidence. Do not use guessed, placeholder, repeated, or
+        leaked values.
+
+        Call `get_current_time` immediately before this tool and use the exact
+        returned timestamp as `time_verified`. This creates the audit record for
+        the completed verification.
 
         Args:
             name: The verified user's full name
@@ -545,15 +555,18 @@ class KnowledgeTools(ToolKitBase):
     ) -> str:
         """Pass a tool to the user so they can execute it themselves.
 
-        Use this when the knowledge base indicates that the user should perform
-        an action themselves (e.g., "to do X, have the user call tool_name(args)").
+        Use this only when a knowledge-base document that was actually read says
+        the customer should perform the action through a specific user-side
+        discoverable tool.
 
-        The user will then be able to call `call_discoverable_tool` with the same
-        tool name and arguments to simulate executing the action.
+        Use the exact tool name from that source document. Do not guess tool
+        names. Pass only arguments that are known or policy-approved. After this
+        tool is given, the user can execute it by calling
+        `call_discoverable_user_tool` with the same tool name and arguments.
 
         Args:
-            discoverable_tool_name: The name of the discoverable tool (e.g., "open_webpage", "navigate_to_section")
-            arguments: JSON string or object of arguments for the tool (e.g., '{"url": "https://example.com"}')
+            discoverable_tool_name: The exact user-side discoverable tool name found in the knowledge base
+            arguments: JSON string or object of known arguments for the user-side tool
 
         Returns:
             A confirmation message with instructions for the user
@@ -612,15 +625,15 @@ class KnowledgeTools(ToolKitBase):
     def unlock_discoverable_agent_tool(self, agent_tool_name: str) -> str:
         """Unlock an agent discoverable tool that was found in the knowledge base.
 
-        Use this when the knowledge base indicates that you have access to a specialized
-        internal tool. The knowledge base will tell you the tool name to unlock.
+        Use this only after a knowledge-base document has been read and names the
+        exact specialized internal tool needed for the current task. Do not guess
+        tool names from policy text or examples.
 
-        After unlocking, you can use the tool by calling `call_discoverable_agent_tool` with
-        the tool name and required arguments.
+        After unlocking, use `call_discoverable_agent_tool` with the same exact
+        tool name and the required arguments from the source document.
 
         Args:
             agent_tool_name: The name of the agent discoverable tool to unlock
-                            (e.g., "calculate_apr_adjustment_7842")
 
         Returns:
             A confirmation message with the tool's description and parameters
@@ -655,12 +668,14 @@ class KnowledgeTools(ToolKitBase):
     ) -> str:
         """Call an agent discoverable tool that you have previously unlocked.
 
-        Use this after unlocking a tool with `unlock_discoverable_agent_tool`. The knowledge base
-        will tell you which tool to use and what arguments to provide.
+        Use this only after `unlock_discoverable_agent_tool` has successfully
+        unlocked the same exact tool name. Provide only arguments supported by
+        the unlocked tool description and the source knowledge-base document.
+        Do not guess missing arguments.
 
         Args:
             agent_tool_name: The name of the agent discoverable tool to call
-            arguments: JSON string or object of arguments for the tool (e.g., '{"user_id": "abc123"}')
+            arguments: JSON string or object of arguments for the unlocked tool
 
         Returns:
             The result of executing the agent tool
@@ -4455,14 +4470,15 @@ class KnowledgeUserTools(ToolKitBase):
         """Call a tool that was given to you by the agent.
 
         Use this when the agent has instructed you to perform an action using
-        a discoverable tool. The agent will have told you the tool name and arguments.
+        a discoverable user-side banking tool. The agent will have given you the
+        exact tool name and any arguments you should pass.
 
-        This simulates you performing the action in the real world (e.g., opening
-        a webpage, navigating to a section, clicking a button).
+        This simulates you performing the user-side action yourself outside the
+        agent's direct control.
 
         Args:
-            discoverable_tool_name: The name of the discoverable tool to call (e.g., "open_webpage")
-            arguments: JSON string or object of arguments for the tool (e.g., '{"url": "https://example.com"}')
+            discoverable_tool_name: The exact discoverable tool name the agent gave you
+            arguments: JSON string or object of arguments the agent provided for that tool
 
         Returns:
             The result of executing the discoverable tool

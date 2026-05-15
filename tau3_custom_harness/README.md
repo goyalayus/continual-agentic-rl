@@ -9,16 +9,20 @@ The shape is:
 - The environment is built with `retrieval_variant="no_knowledge"`, so Tau's old
   KB search, grep, and shell tools are not exposed.
 - The planner sees the banking DB/action tools plus one internal tool:
-  `ask_knowledge_subagent`.
+  `ask_knowledge_subagents(requests)`. It accepts 1 to 4 labeled KB research
+  requests, runs those subagents in parallel, and returns labeled notes.
 - The runner uses `SafeUserSimulator`, a thin wrapper around Tau's user
   simulator that retries empty model outputs and falls back to `###STOP###`
   instead of crashing the whole run.
 - KB subagents see only:
   `search(query, top_k=10)` and `read_doc(doc_id)`.
+  `query` can be one string or up to 3 related query strings. Multi-query
+  search merges and dedupes results before returning summaries.
 - The planner talks to the user. KB subagents never talk to the user and never
   call DB tools.
-- Subagents can delegate one more level: planner -> subagent -> subagent. No
-  deeper.
+- Subagents cannot spawn subagents. The only allowed shape is
+  planner -> subagent, so the planner must break KB work into separate subagent
+  questions itself.
 - Discoverable agent/user tools are evidence-bound in the harness: the planner
   must have a KB document read that contains the exact hidden tool name before
   it can unlock, call, or give that tool.
