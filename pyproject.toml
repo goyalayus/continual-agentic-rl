@@ -84,7 +84,26 @@ Repository = "https://github.com/sierra-research/tau2-bench"
 [project.scripts]
 tau2 = "tau2.cli:main"
 
+[tool.hatch.build.targets.wheel]
+packages = [
+    "default_harness/src/tau2",
+    "custom_harness/tau3_custom_harness",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "default_harness/src",
+    "default_harness/data",
+    "custom_harness/tau3_custom_harness",
+    "README.md",
+]
+
 [tool.pytest.ini_options]
+testpaths = ["default_harness/tests"]
+pythonpath = [
+    "default_harness/src",
+    "custom_harness",
+]
 filterwarnings = [
     "ignore::DeprecationWarning:litellm.*:",
     "ignore:Pydantic serializer warnings:UserWarning:pydantic.*:",

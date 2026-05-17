@@ -7,10 +7,15 @@ import argparse
 import os
 import re
 import sys
+from pathlib import Path
 
 
 CHAT_MODEL = "azure/gpt-5.5"
 EMBEDDING_MODEL = "qwen/qwen3-embedding-8b"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+CUSTOM_HARNESS_DIR = REPO_ROOT / "custom_harness"
+if str(CUSTOM_HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(CUSTOM_HARNESS_DIR))
 
 
 def parse_args() -> argparse.Namespace:

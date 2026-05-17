@@ -21,9 +21,13 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SRC_DIR = REPO_ROOT / "src"
+DEFAULT_HARNESS_DIR = REPO_ROOT / "default_harness"
+CUSTOM_HARNESS_DIR = REPO_ROOT / "custom_harness"
+SRC_DIR = DEFAULT_HARNESS_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+if str(CUSTOM_HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(CUSTOM_HARNESS_DIR))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -33,7 +37,14 @@ from tau3_custom_harness.run_banking import run_banking_task
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 RUNS_DIR = EXPERIMENT_DIR / "runs"
 ARTIFACTS_DIR = EXPERIMENT_DIR / "artifacts"
-TASKS_JSON = REPO_ROOT / "data" / "tau2" / "domains" / "banking_knowledge" / "tasks.json"
+TASKS_JSON = (
+    DEFAULT_HARNESS_DIR
+    / "data"
+    / "tau2"
+    / "domains"
+    / "banking_knowledge"
+    / "tasks.json"
+)
 
 
 @dataclass(frozen=True)

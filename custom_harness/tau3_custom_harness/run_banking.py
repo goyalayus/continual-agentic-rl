@@ -11,10 +11,14 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "src"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_HARNESS_DIR = REPO_ROOT / "default_harness"
+CUSTOM_HARNESS_DIR = REPO_ROOT / "custom_harness"
+SRC_DIR = DEFAULT_HARNESS_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+if str(CUSTOM_HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(CUSTOM_HARNESS_DIR))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -69,7 +73,11 @@ def parse_args() -> argparse.Namespace:
         default=os.environ.get("TAU3_SUBAGENT_LLM_ARGS_JSON"),
         help="Optional JSON object merged into KB subagent LLM args.",
     )
-    parser.add_argument("--log-dir", type=Path, default=REPO_ROOT / "tau3_custom_harness_runs")
+    parser.add_argument(
+        "--log-dir",
+        type=Path,
+        default=REPO_ROOT / "benchmark_evaluation" / "custom_harness_runs",
+    )
     parser.add_argument(
         "--run-id",
         default=None,

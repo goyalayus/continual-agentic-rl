@@ -45,22 +45,22 @@ Run one task:
 OPENROUTER_API_KEY=... \
 TAU3_AGENT_MODEL=gpt-4.1 \
 TAU3_USER_MODEL=gpt-4.1 \
-uv run python tau3_custom_harness/run_banking.py --task-id task_001
+uv run python custom_harness/tau3_custom_harness/run_banking.py --task-id task_001
 ```
 
 Run without the evaluator:
 
 ```bash
-uv run python tau3_custom_harness/run_banking.py --task-id task_001 --skip-eval
+uv run python custom_harness/tau3_custom_harness/run_banking.py --task-id task_001 --skip-eval
 ```
 
 Smoke test the wiring without calling an LLM:
 
 ```bash
-uv run python tau3_custom_harness/smoke_test.py
+uv run python custom_harness/tau3_custom_harness/smoke_test.py
 ```
 
-Logs go to `tau3_custom_harness_runs/<run_id>/` as:
+Logs go to `benchmark_evaluation/custom_harness_runs/<run_id>/` as:
 
 - `events.jsonl`: planner/subagent/search/read events
 - `simulation.json`: Tau simulation object with messages and reward info
@@ -73,7 +73,7 @@ without changing the trace format.
 To upload at the end of a run:
 
 ```bash
-uv run python tau3_custom_harness/run_banking.py --task-id task_001 --s3-uri s3://your-bucket/tau3-runs
+uv run python custom_harness/tau3_custom_harness/run_banking.py --task-id task_001 --s3-uri s3://your-bucket/tau3-runs
 ```
 
 That uses `aws s3 sync`. Upload failures are logged but do not fail the local run

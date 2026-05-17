@@ -9,19 +9,19 @@ dumps/
 dump.rdb
 *.rdg
 logs/
-tau3_custom_harness_runs/
+benchmark_evaluation/custom_harness_runs/
 experiments/*/runs/
 experiments/*/batch_*.json
 experiments/*/calibration_*.json
 experiments/**/*.json
 experiments/**/*.jsonl.gz
-data/simulations/*
-data/exp/
-data/datasets/
-data/models/
-data/analyses/
-data/annotations/
-src/experiments/model_serving/vllm_serving/.*
+default_harness/data/simulations/*
+default_harness/data/exp/
+default_harness/data/datasets/
+default_harness/data/models/
+default_harness/data/analyses/
+default_harness/data/annotations/
+default_harness/src/experiments/model_serving/vllm_serving/.*
 .ruff_cache
 
 # Byte-compiled / optimized / DLL files
@@ -202,15 +202,15 @@ cython_debug/
 *.arrow
 cache-*.arrow
 data-*-of-*.arrow
-src/experiments/model_training/data/full-v1/*/cache-*.arrow
-src/experiments/model_training/data/full-v1/*/data-*.arrow
-data/.embeddings_cache/
+default_harness/src/experiments/model_training/data/full-v1/*/cache-*.arrow
+default_harness/src/experiments/model_training/data/full-v1/*/data-*.arrow
+default_harness/data/.embeddings_cache/
 
 # Large JSONL training files
 src/experiments/model_training/data/train_full-v1.jsonl
 src/experiments/model_training/data/test_full-v1.jsonl
-data/simulations/.credentials/
-!data/simulations/knowledge/
+default_harness/data/simulations/.credentials/
+!default_harness/data/simulations/knowledge/
 
 # LaTeX build artifacts
 *.aux

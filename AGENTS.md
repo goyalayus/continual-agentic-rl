@@ -14,7 +14,7 @@ uv sync --extra voice          # + voice/audio-native features
 uv sync --extra knowledge      # + banking_knowledge domain (retrieval pipeline)
 uv sync --extra gym            # + gymnasium RL interface
 uv sync --extra dev            # + pytest, ruff, pre-commit (required for committing)
-uv sync --extra experiments    # + plotting libs for src/experiments/
+uv sync --extra experiments    # + plotting libs for default_harness/src/experiments/
 uv sync --all-extras           # everything
 uv run tau2 check-data         # verify installation
 ```
@@ -59,12 +59,12 @@ tau2 run --domain retail --audio-native --num-tasks 1 --verbose-logs
 tau2 run --domain banking_knowledge --retrieval-config qwen_embeddings --agent-llm gpt-4.1 --user-llm gpt-4.1 --num-tasks 5
 ```
 
-Results go to `data/simulations/`. Use `tau2 view` to browse them.
+Results go to `default_harness/data/simulations/`. Use `tau2 view` to browse them.
 
 ## Architecture
 
 ```
-src/tau2/
+default_harness/src/tau2/
 ├── agent/           # Agent implementations (half-duplex and full-duplex)
 ├── api_service/     # FastAPI-based API service
 ├── config.py        # Central configuration (single source of truth for defaults)
@@ -86,18 +86,18 @@ src/tau2/
     └── audio_native/  # Real-time voice providers (openai, gemini, nova, xai, deepgram, qwen, livekit)
 ```
 
-Other top-level directories:
-- `data/` — Domain data (JSON, TOML, policies), simulation outputs
-- `tests/` — All tests (pytest)
-- `scripts/` — Standalone utility scripts
-- `src/experiments/` — Research/experimental code (self-contained)
-- `docs/` — User-facing documentation
+Top-level directories:
+- `default_harness/` — The upstream Tau2/Tau3 framework, data, docs, tests, and leaderboard site.
+- `custom_harness/` — The custom Tau3 banking planner/subagent harness.
+- `experiments/` — Dated experiment folders.
+- `benchmark_evaluation/` — Benchmark run artifacts and evaluation outputs.
+- `dataset_generation/` — Reserved for generated datasets; empty for now.
 
 ## Key Patterns
 
 ### Registry System
 
-All agents, domains, tasks, and user simulators are registered in `src/tau2/registry.py`. To add a new component, register it there:
+All agents, domains, tasks, and user simulators are registered in `default_harness/src/tau2/registry.py`. To add a new component, register it there:
 
 ```python
 registry.register_agent_factory(create_my_agent, "my_agent")
@@ -119,16 +119,16 @@ For LLM-based agents, mix in `LLMConfigMixin` to add `llm` and `llm_args` parame
 
 ### Domain Structure
 
-Each domain (`src/tau2/domains/<name>/`) contains:
+Each domain (`default_harness/src/tau2/domains/<name>/`) contains:
 - `data_model.py` — DB subclass with domain data models
 - `tools.py` — `ToolKitBase` subclass with domain tools
 - `environment.py` — `get_environment()`, `get_tasks()`, `get_tasks_split()`
 - `user_tools.py` (optional) — user-facing tools
 - `utils.py` — data paths and helpers
 
-Domain data lives in `data/tau2/domains/<name>/` (tasks.json, policy.md, db.json/toml, etc.).
+Domain data lives in `default_harness/data/tau2/domains/<name>/` (tasks.json, policy.md, db.json/toml, etc.).
 
-**Note:** The `banking_knowledge` domain extends the standard pattern with additional files (`retrieval.py`, `retrieval_mixins.py`, `retrieval_toolkits.py`, `db_query.py`), dynamic tools and policy that vary by `--retrieval-config`, and a separate `knowledge/` retrieval pipeline module. Its data directory also includes `documents/`, `prompts/`, and `tasks/` subdirectories. See `src/tau2/knowledge/README.md` for details.
+**Note:** The `banking_knowledge` domain extends the standard pattern with additional files (`retrieval.py`, `retrieval_mixins.py`, `retrieval_toolkits.py`, `db_query.py`), dynamic tools and policy that vary by `--retrieval-config`, and a separate `knowledge/` retrieval pipeline module. Its data directory also includes `documents/`, `prompts/`, and `tasks/` subdirectories. See `default_harness/src/tau2/knowledge/README.md` for details.
 
 ### Orchestrators
 
@@ -156,20 +156,20 @@ make test-gym
 make test-all
 
 # Domain-specific (core domains work with `make test`)
-pytest tests/test_domains/test_<domain_name>
+pytest default_harness/tests/test_domains/test_<domain_name>
 
 # Specific test file
-pytest tests/test_agent.py
+pytest default_harness/tests/test_agent.py
 
 # Skip full-duplex integration tests (require live APIs)
 pytest -m "not full_duplex_integration"
 ```
 
 Test layout mirrors source:
-- `tests/test_domains/` — per-domain tool and user-tool tests (except `test_banking_knowledge/` which requires the `knowledge` extra)
-- `tests/test_streaming/` — streaming/full-duplex tests (requires `voice` extra)
-- `tests/test_voice/` — audio-native provider tests (requires `voice` extra; individual providers gated by `{PROVIDER}_TEST_ENABLED=1`)
-- `tests/test_gym/` — gymnasium RL interface tests (requires `gym` extra)
+- `default_harness/tests/test_domains/` — per-domain tool and user-tool tests (except `test_banking_knowledge/` which requires the `knowledge` extra)
+- `default_harness/tests/test_streaming/` — streaming/full-duplex tests (requires `voice` extra)
+- `default_harness/tests/test_voice/` — audio-native provider tests (requires `voice` extra; individual providers gated by `{PROVIDER}_TEST_ENABLED=1`)
+- `default_harness/tests/test_gym/` — gymnasium RL interface tests (requires `gym` extra)
 
 ## Code Style
 
@@ -195,11 +195,11 @@ test: add integration tests for retail domain
 ## Things to Watch Out For
 
 - **`.env` file**: Never commit this. Contains API keys. Use `.env.example` as reference.
-- **`data/` directory**: Contains domain data that the framework depends on. Be careful modifying JSON/TOML data files.
+- **`default_harness/data/` directory**: Contains domain data that the framework depends on. Be careful modifying JSON/TOML data files.
 - **`config.py`**: Single source of truth for default configuration values. Import constants from here rather than defining local duplicates.
 - **`registry.py`**: All new agents, domains, and user simulators must be registered here to be usable via CLI.
-- **Audio native providers**: Each has its own WebSocket protocol and event format. Always verify against provider documentation. See `.cursor/rules/audio-native-provider.md` for the full implementation guide.
+- **Audio native providers**: Each has its own WebSocket protocol and event format. Always verify against provider documentation. See `default_harness/.cursor/rules/audio-native-provider.md` for the full implementation guide.
 - **Task splits**: The `base` split is the default for evaluation. The `train`/`test` splits are for RL experiments.
 - **Pre-commit hook**: Runs `make check-all` (ruff lint + format). Fix any issues before committing.
 - **Notebooks**: Excluded from ruff (`*.ipynb` in pyproject.toml exclude).
-- **`banking_knowledge` domain**: Uses `--retrieval-config` to specify how the agent accesses the knowledge base. If omitted, defaults to `bm25` (offline, no API keys needed). Offline configs: `no_knowledge`, `full_kb`, `golden_retrieval`, `bm25`, `bm25_grep`, `grep_only`. `openai_embeddings*` configs require `OPENAI_API_KEY`. `qwen_embeddings*` configs require `OPENROUTER_API_KEY` (included in `.env.example`). `*_reranker` configs additionally require `OPENAI_API_KEY` for the LLM reranker. `terminal_use*` configs require `sandbox-runtime` (`npm install -g @anthropic-ai/sandbox-runtime@0.0.23`). Embedding cache lives in `data/.embeddings_cache` (gitignored). See `src/tau2/knowledge/README.md` for full details.
+- **`banking_knowledge` domain**: Uses `--retrieval-config` to specify how the agent accesses the knowledge base. If omitted, defaults to `bm25` (offline, no API keys needed). Offline configs: `no_knowledge`, `full_kb`, `golden_retrieval`, `bm25`, `bm25_grep`, `grep_only`. `openai_embeddings*` configs require `OPENAI_API_KEY`. `qwen_embeddings*` configs require `OPENROUTER_API_KEY` (included in `.env.example`). `*_reranker` configs additionally require `OPENAI_API_KEY` for the LLM reranker. `terminal_use*` configs require `sandbox-runtime` (`npm install -g @anthropic-ai/sandbox-runtime@0.0.23`). Embedding cache lives in `default_harness/data/.embeddings_cache` (gitignored). See `default_harness/src/tau2/knowledge/README.md` for full details.

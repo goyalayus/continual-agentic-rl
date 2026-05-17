@@ -11,10 +11,14 @@ import sys
 import tempfile
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-SRC_DIR = REPO_ROOT / "src"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_HARNESS_DIR = REPO_ROOT / "default_harness"
+CUSTOM_HARNESS_DIR = REPO_ROOT / "custom_harness"
+SRC_DIR = DEFAULT_HARNESS_DIR / "src"
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
+if str(CUSTOM_HARNESS_DIR) not in sys.path:
+    sys.path.insert(0, str(CUSTOM_HARNESS_DIR))
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 

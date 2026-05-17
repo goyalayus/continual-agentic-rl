@@ -12,6 +12,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_HARNESS_DIR = REPO_ROOT / "default_harness"
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 DEFAULT_MODEL = "azure/gpt-5.4-nano"
 DEFAULT_SAVE_TO = "gpt54nano_default_banking_bm25_1trial"
@@ -102,7 +103,7 @@ def llm_args(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def results_path(save_to: str) -> Path:
-    return REPO_ROOT / "data" / "simulations" / save_to / "results.json"
+    return DEFAULT_HARNESS_DIR / "data" / "simulations" / save_to / "results.json"
 
 
 def score_results(path: Path) -> dict[str, Any]:

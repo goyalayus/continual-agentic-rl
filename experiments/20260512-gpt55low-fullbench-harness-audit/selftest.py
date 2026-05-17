@@ -512,8 +512,8 @@ def test_prompt_guard_detects_task_data() -> None:
         )
         diff = "\n".join(
             [
-                "diff --git a/tau3_custom_harness/prompts.py b/tau3_custom_harness/prompts.py",
-                "+++ b/tau3_custom_harness/prompts.py",
+                "diff --git a/custom_harness/tau3_custom_harness/prompts.py b/custom_harness/tau3_custom_harness/prompts.py",
+                "+++ b/custom_harness/tau3_custom_harness/prompts.py",
                 "@@",
                 "+Never special-case task_042.",
                 "+Use normal verification guidance.",
@@ -525,8 +525,8 @@ def test_prompt_guard_detects_task_data() -> None:
 
         diff = "\n".join(
             [
-                "diff --git a/tau3_custom_harness/prompts.py b/tau3_custom_harness/prompts.py",
-                "+++ b/tau3_custom_harness/prompts.py",
+                "diff --git a/custom_harness/tau3_custom_harness/prompts.py b/custom_harness/tau3_custom_harness/prompts.py",
+                "+++ b/custom_harness/tau3_custom_harness/prompts.py",
                 "@@",
                 "+Never special-case task 042.",
             ]
@@ -537,8 +537,8 @@ def test_prompt_guard_detects_task_data() -> None:
 
         diff = "\n".join(
             [
-                "diff --git a/tau3_custom_harness/prompts.py b/tau3_custom_harness/prompts.py",
-                "+++ b/tau3_custom_harness/prompts.py",
+                "diff --git a/custom_harness/tau3_custom_harness/prompts.py b/custom_harness/tau3_custom_harness/prompts.py",
+                "+++ b/custom_harness/tau3_custom_harness/prompts.py",
                 "@@",
                 "+Use reward-secret-phrase-901 as a reminder.",
                 "+Check custom-run-secret-123 before acting.",
@@ -605,8 +605,8 @@ def test_prompt_guard_tracks_relevant_untracked_files() -> None:
         if args == ("ls-files", "--others", "--exclude-standard"):
             return "\n".join(
                 [
-                    "tau3_custom_harness/leaky_prompt.py",
-                    "src/tau2/domains/banking_knowledge/new_tool.py",
+                    "custom_harness/tau3_custom_harness/leaky_prompt.py",
+                    "default_harness/src/tau2/domains/banking_knowledge/new_tool.py",
                     "README.md",
                     "experiments/notes.md",
                 ]
@@ -615,12 +615,12 @@ def test_prompt_guard_tracks_relevant_untracked_files() -> None:
 
     guard.git = fake_git
     assert guard.untracked_guard_paths().splitlines() == [
-        "tau3_custom_harness/leaky_prompt.py",
-        "src/tau2/domains/banking_knowledge/new_tool.py",
+        "custom_harness/tau3_custom_harness/leaky_prompt.py",
+        "default_harness/src/tau2/domains/banking_knowledge/new_tool.py",
     ]
     assert guard.changed_paths("main") == [
-        "src/tau2/domains/banking_knowledge/new_tool.py",
-        "tau3_custom_harness/leaky_prompt.py",
+        "default_harness/src/tau2/domains/banking_knowledge/new_tool.py",
+        "custom_harness/tau3_custom_harness/leaky_prompt.py",
     ]
 
 

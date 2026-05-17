@@ -15,6 +15,8 @@ from typing import Any
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EXPERIMENT_DIR.parents[1]
+DEFAULT_HARNESS_DIR = REPO_ROOT / "default_harness"
+CUSTOM_HARNESS_DIR = REPO_ROOT / "custom_harness"
 CUSTOM_RUNNER_PATH = (
     REPO_ROOT / "experiments/20260509-gpt54mini-harness/run_azure_batch.py"
 )
@@ -256,7 +258,8 @@ def main() -> int:
 
     os.chdir(REPO_ROOT)
     sys.path.insert(0, str(EXPERIMENT_DIR))
-    sys.path.insert(0, str(REPO_ROOT / "src"))
+    sys.path.insert(0, str(DEFAULT_HARNESS_DIR / "src"))
+    sys.path.insert(0, str(CUSTOM_HARNESS_DIR))
     sys.path.insert(0, str(REPO_ROOT))
 
     custom_runner = import_from_path("tau3_custom_batch_runner", CUSTOM_RUNNER_PATH)

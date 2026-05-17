@@ -15,27 +15,27 @@ clean:
 ## Run core tests (requires: uv sync --extra dev)
 .PHONY: test
 test:
-	uv run pytest tests/ --ignore=tests/test_voice --ignore=tests/test_streaming --ignore=tests/test_gym --ignore=tests/test_domains/test_banking_knowledge
+	uv run pytest default_harness/tests/ --ignore=default_harness/tests/test_voice --ignore=default_harness/tests/test_streaming --ignore=default_harness/tests/test_gym --ignore=default_harness/tests/test_domains/test_banking_knowledge
 
 ## Run voice and streaming tests (requires: uv sync --extra dev --extra voice)
 .PHONY: test-voice
 test-voice:
-	uv run pytest tests/test_voice tests/test_streaming -m "not full_duplex_integration"
+	uv run pytest default_harness/tests/test_voice default_harness/tests/test_streaming -m "not full_duplex_integration"
 
 ## Run knowledge/banking tests (requires: uv sync --extra dev --extra knowledge)
 .PHONY: test-knowledge
 test-knowledge:
-	uv run pytest tests/test_domains/test_banking_knowledge
+	uv run pytest default_harness/tests/test_domains/test_banking_knowledge
 
 ## Run gymnasium tests (requires: uv sync --extra dev --extra gym)
 .PHONY: test-gym
 test-gym:
-	uv run pytest tests/test_gym
+	uv run pytest default_harness/tests/test_gym
 
 ## Run all tests (requires: uv sync --all-extras)
 .PHONY: test-all
 test-all:
-	uv run pytest tests/
+	uv run pytest default_harness/tests/
 
 ## Start the Environment CLI for interacting with domain environments
 .PHONY: env-cli

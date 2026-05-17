@@ -19,12 +19,13 @@ from typing import Any, Iterable
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EXPERIMENT_DIR.parents[1]
+DEFAULT_HARNESS_DIR = REPO_ROOT / "default_harness"
 DEFAULT_CUSTOM_ARTIFACTS = (
     REPO_ROOT / "experiments/20260509-gpt54mini-harness/artifacts"
 )
 DEFAULT_CUSTOM_RUNS = REPO_ROOT / "experiments/20260509-gpt54mini-harness/runs"
-DEFAULT_SIMULATIONS = REPO_ROOT / "data/simulations"
-DEFAULT_TASKS_DIR = REPO_ROOT / "data/tau2/domains/banking_knowledge/tasks"
+DEFAULT_SIMULATIONS = DEFAULT_HARNESS_DIR / "data/simulations"
+DEFAULT_TASKS_DIR = DEFAULT_HARNESS_DIR / "data/tau2/domains/banking_knowledge/tasks"
 DEFAULT_OUTPUT_JSON = EXPERIMENT_DIR / "comparison_summary.json"
 DEFAULT_OUTPUT_CSV = EXPERIMENT_DIR / "comparison_summary.csv"
 DEFAULT_CUSTOM_SOURCE_PREFIXES = ("baseline_custom_azure_gpt55low_",)

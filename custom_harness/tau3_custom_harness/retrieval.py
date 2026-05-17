@@ -18,9 +18,10 @@ from urllib.request import Request, urlopen
 import numpy as np
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_HARNESS_DIR = REPO_ROOT / "default_harness"
 DEFAULT_INDEX_DIR = (
-    REPO_ROOT
+    DEFAULT_HARNESS_DIR
     / "data"
     / ".embeddings_cache"
     / "banking_knowledge"
@@ -264,7 +265,7 @@ class BankingHybridRetriever:
             suffix = f" Did you mean: {', '.join(close)}?" if close else ""
             raise KeyError(f"Unknown document id: {doc_id}.{suffix}")
 
-        source_file = REPO_ROOT / self.docs_by_id[doc_id]["source_file"]
+        source_file = DEFAULT_HARNESS_DIR / self.docs_by_id[doc_id]["source_file"]
         raw = json.loads(source_file.read_text())
         return f"# {raw['title']}\n\n{raw['content']}".strip()
 
@@ -337,7 +338,7 @@ class BankingHybridRetriever:
             if doc_id not in self.summaries:
                 missing.append(f"summary missing for doc_id: {doc_id}")
                 break
-            source_file = REPO_ROOT / doc.get("source_file", "")
+            source_file = DEFAULT_HARNESS_DIR / doc.get("source_file", "")
             if not source_file.exists():
                 missing.append(f"source document missing for doc_id {doc_id}: {source_file}")
                 break

@@ -34,6 +34,14 @@ This repo will hold the code, traces, eval configs, and training scripts for the
 
 **big model eval -> distillation -> small model RL -> held-out eval**
 
+## Repo Layout
+
+- `default_harness/` — upstream Tau harness code, data, docs, tests, and leaderboard.
+- `custom_harness/` — custom Tau3 banking harness.
+- `experiments/` — dated experiment folders.
+- `benchmark_evaluation/` — benchmark run artifacts and evaluation outputs.
+- `dataset_generation/` — reserved for generated datasets; empty for now.
+
 ## Team
 
 Ayush, Manan, [Vyom](https://github.com/vyomakesh0728), [Kanishk](https://github.com/kanishkez).

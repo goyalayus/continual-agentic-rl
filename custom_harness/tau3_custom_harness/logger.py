@@ -20,7 +20,11 @@ class HarnessLogger:
         self.run_id = run_id or datetime.now(timezone.utc).strftime(
             "run_%Y%m%d_%H%M%S_"
         ) + uuid.uuid4().hex[:8]
-        base_dir = Path(log_dir) if log_dir is not None else Path("tau3_custom_harness_runs")
+        base_dir = (
+            Path(log_dir)
+            if log_dir is not None
+            else Path("benchmark_evaluation/custom_harness_runs")
+        )
         self.run_dir = base_dir / self.run_id
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.events_path = self.run_dir / "events.jsonl"

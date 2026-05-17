@@ -15,9 +15,9 @@ EXPERIMENT_DIR = Path(__file__).resolve().parent
 DEFAULT_AUDIT_JSON = EXPERIMENT_DIR / "failure_audit.json"
 DEFAULT_FIX_INPUT_JSON = EXPERIMENT_DIR / "generic_fix_input.json"
 ALLOWED_PATHS = {
-    "tau3_custom_harness/prompts.py",
-    "tau3_custom_harness/agent.py",
-    "src/tau2/domains/banking_knowledge/tools.py",
+    "custom_harness/tau3_custom_harness/prompts.py",
+    "custom_harness/tau3_custom_harness/agent.py",
+    "default_harness/src/tau2/domains/banking_knowledge/tools.py",
 }
 
 CODEISH_LINE = re.compile(
@@ -84,8 +84,8 @@ def changed_paths(base: str) -> list[str]:
 def untracked_guard_paths() -> str:
     output = git("ls-files", "--others", "--exclude-standard")
     guarded_prefixes = (
-        "tau3_custom_harness/",
-        "src/tau2/domains/banking_knowledge/",
+        "custom_harness/tau3_custom_harness/",
+        "default_harness/src/tau2/domains/banking_knowledge/",
     )
     paths = [
         line

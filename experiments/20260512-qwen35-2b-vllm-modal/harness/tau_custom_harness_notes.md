@@ -7,7 +7,7 @@ The custom banking harness already goes through LiteLLM. To point it at this
 Modal/vLLM endpoint later, use the hosted-vLLM provider shape:
 
 ```bash
-uv run python tau3_custom_harness/run_banking.py \
+uv run python custom_harness/tau3_custom_harness/run_banking.py \
   --task-id task_006 \
   --agent-model hosted_vllm/qwen3.5-2b \
   --user-model hosted_vllm/qwen3.5-2b \

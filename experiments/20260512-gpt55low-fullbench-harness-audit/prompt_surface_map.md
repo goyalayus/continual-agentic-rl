@@ -13,16 +13,16 @@ general.
 
 `check_prompt_only_diff.py` currently allows changes only in:
 
-- `tau3_custom_harness/prompts.py`
-- `tau3_custom_harness/agent.py`
-- `src/tau2/domains/banking_knowledge/tools.py`
+- `custom_harness/tau3_custom_harness/prompts.py`
+- `custom_harness/tau3_custom_harness/agent.py`
+- `default_harness/src/tau2/domains/banking_knowledge/tools.py`
 
 The allowlist is path-level, but the practical safe surface is narrower:
 prompt literals, tool docstrings, and correction text. Logic changes, runner
 changes, retriever changes, evaluator changes, and task-specific prompt text are
 out of scope for the fix branch.
 
-## `tau3_custom_harness/prompts.py`
+## `custom_harness/tau3_custom_harness/prompts.py`
 
 This is the cleanest prompt-only surface.
 
@@ -44,7 +44,7 @@ Use this file for broad behavioral instructions such as when to research,
 when to verify, how to separate user-side and agent-side tools, and how to avoid
 acting without source evidence.
 
-## `tau3_custom_harness/agent.py`
+## `custom_harness/tau3_custom_harness/agent.py`
 
 This file contains model-facing text and tool descriptions, but it also
 contains harness logic. The safe edits here are the string/docstring surfaces,
@@ -73,7 +73,7 @@ Use this file for clearer tool descriptions and correction text only. If a diff
 adds or changes Python control flow here, assume it is outside the intended
 fix surface until proven otherwise.
 
-## `src/tau2/domains/banking_knowledge/tools.py`
+## `default_harness/src/tau2/domains/banking_knowledge/tools.py`
 
 This is the banking tool catalog. It is allowed because many tool descriptions
 and discoverable-tool cards come directly from docstrings.

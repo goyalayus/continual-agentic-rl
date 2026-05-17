@@ -12,7 +12,7 @@ from pathlib import Path
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EXPERIMENT_DIR.parents[1]
 SUMMARY_PATH = EXPERIMENT_DIR / "comparison_summary.json"
-TASKS_DIR = REPO_ROOT / "data/tau2/domains/banking_knowledge/tasks"
+TASKS_DIR = REPO_ROOT / "default_harness/data/tau2/domains/banking_knowledge/tasks"
 EXPECTED_TASKS = 97
 EXPECTED_RUNS_PER_HARNESS = 4
 DEFAULT_REQUIRED_CUSTOM_PREFIX = "baseline_custom_azure_gpt55low_"

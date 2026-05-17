@@ -6,10 +6,10 @@ This script does NOT re-run evaluators - it just recombines existing component r
 using the new reward_basis defined in the current task definitions.
 
 Usage:
-    python src/tau2/scripts/recombine_rewards.py <experiment_dir>
+    python default_harness/src/tau2/scripts/recombine_rewards.py <experiment_dir>
 
 Example:
-    python src/tau2/scripts/recombine_rewards.py data/tmp/gdrive/experiment_2025_01_22_v3_regular_openai_low_vad
+    python default_harness/src/tau2/scripts/recombine_rewards.py default_harness/data/tmp/gdrive/experiment_2025_01_22_v3_regular_openai_low_vad
 """
 
 import argparse
@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from tau2.utils import DATA_DIR
 from tau2.utils.io_utils import load_results_dict
 
 
@@ -143,7 +144,7 @@ def recombine_results(experiment_dir: str, domain: str | None = None) -> None:
             continue
 
         # Load current task definitions
-        tasks_file = Path(f"data/tau2/domains/{domain_name}/tasks.json")
+        tasks_file = DATA_DIR / "tau2" / "domains" / domain_name / "tasks.json"
         if not tasks_file.exists():
             print(f"  Warning: Tasks file not found: {tasks_file}, skipping")
             continue

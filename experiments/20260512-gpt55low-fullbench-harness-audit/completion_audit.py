@@ -13,7 +13,7 @@ from pathlib import Path
 
 EXPERIMENT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = EXPERIMENT_DIR.parents[1]
-TASKS_DIR = REPO_ROOT / "data/tau2/domains/banking_knowledge/tasks"
+TASKS_DIR = REPO_ROOT / "default_harness/data/tau2/domains/banking_knowledge/tasks"
 
 BASELINE_SUMMARY = EXPERIMENT_DIR / "comparison_summary.json"
 FAILURE_AUDIT_MD = EXPERIMENT_DIR / "failure_audit.md"
